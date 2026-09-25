@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Kube Debugger — troubleshoot a broken Kubernetes deployment</title>
+<title>Kube Debugger — interactive Kubernetes troubleshooting</title>
 <meta name="description" content="Interactive troubleshooting flowchart for Kubernetes Deployments, Services and Ingresses. Answer a few questions, get the fix.">
 <style>
   :root{
@@ -59,6 +59,15 @@
   details{margin-top:26px;color:var(--dim)}
   summary{cursor:pointer}
   details img{width:100%;margin-top:12px;border-radius:8px;background:#fff}
+  .sheet{margin-top:14px;color:var(--ink)}
+  .sheet h2{font-size:15px;margin:22px 0 8px;color:var(--accent);text-transform:uppercase;letter-spacing:.08em}
+  .sheet h3{font-size:14px;margin:14px 0 4px;color:var(--ink)}
+  .sheet blockquote{margin:4px 0 10px;padding-left:10px;border-left:2px solid var(--line);color:var(--dim);font-size:13px}
+  .sheet table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
+  .sheet th,.sheet td{text-align:left;padding:7px 10px;border:1px solid var(--line)}
+  .sheet th{background:var(--panel2);color:var(--dim);font-weight:600}
+  .sheet ol,.sheet ul{padding-left:20px;margin:6px 0}
+  .sheet li{margin:3px 0;font-size:14px}
   footer{margin-top:34px;color:var(--dim);font-size:13px}
   a{color:var(--accent)}
 </style>
@@ -67,11 +76,72 @@
 <div class="wrap">
   <h1>Kube <span>Debugger</span></h1>
   <p class="sub">Pick what you want to debug, answer the questions, land on the fix.
-    Based on the learnk8s troubleshooting flowchart — debug bottom-up: Deployment → Pods → Service → Ingress.</p>
+    Debug bottom-up: Deployment → Pods → Service → Ingress.</p>
   <div id="board"></div>
   <details>
-    <summary>Show the full flowchart</summary>
-    <img src="kube-debugger.png" alt="Kubernetes troubleshooting flowchart" loading="lazy">
+    <summary>kubectl debugging cheatsheet</summary>
+    <div class="sheet">
+      <details style="margin-top:0;margin-bottom:18px">
+        <summary>Show the full flowchart</summary>
+        <img src="kube-debugger.png" alt="Kubernetes troubleshooting flowchart" loading="lazy">
+      </details>
+      <h2>Workflow</h2>
+      <ol><li>Status</li><li>Describe</li><li>Logs</li><li>Events</li><li>Live Inspection</li></ol>
+
+      <h2>Status &amp; Describe</h2>
+      <h3>1. First scan</h3>
+      <pre>~$ kubectl get pods -A --field-selector=status.phase!=Running</pre>
+      <blockquote>Instantly shows every pod that is not running.</blockquote>
+      <h3>2. Details &amp; restart count</h3>
+      <pre>~$ kubectl get pod &lt;name&gt; -o wide</pre>
+      <blockquote>Shows node, IP and restart count.</blockquote>
+      <h3>3. Read events</h3>
+      <pre>~$ kubectl describe pod &lt;name&gt;</pre>
+      <blockquote>The most important command — solves 80% of cases.</blockquote>
+
+      <h2>Logs &amp; Events</h2>
+      <h3>4. CrashLoopBackOff</h3>
+      <pre>~$ kubectl logs &lt;pod&gt; --previous</pre>
+      <blockquote>Returns the logs of the previous crash.</blockquote>
+      <h3>5. Live logs</h3>
+      <pre>~$ kubectl logs &lt;pod&gt; -f --tail=100</pre>
+      <blockquote>Streams the latest logs in real time.</blockquote>
+      <h3>6. Cluster events</h3>
+      <pre>~$ kubectl get events --sort-by=.lastTimestamp -A | tail -30</pre>
+      <blockquote>Helps when describe falls short.</blockquote>
+
+      <h2>Debug &amp; Resources</h2>
+      <h3>7. Ephemeral debug container</h3>
+      <pre>~$ kubectl debug -it &lt;pod&gt; --image=busybox --target=&lt;container&gt;</pre>
+      <blockquote>Ideal for distroless images or pods without a shell.</blockquote>
+      <h3>8. Node problems</h3>
+      <pre>~$ kubectl describe node &lt;name&gt;</pre>
+      <blockquote>For pending pods, evictions or resource issues.</blockquote>
+      <h3>9. Memory pressure</h3>
+      <pre>~$ kubectl top pods -A --sort-by=memory</pre>
+      <blockquote>Finds memory hogs and suspicious pods.</blockquote>
+
+      <h2>Namespace &amp; Access</h2>
+      <h3>10. Namespace scan</h3>
+      <pre>~$ kubectl get all -n &lt;ns&gt;</pre>
+      <blockquote>Shows every key resource in a namespace.</blockquote>
+      <h3>11. Live inspection</h3>
+      <pre>~$ kubectl exec -it &lt;pod&gt; -- /bin/sh</pre>
+      <blockquote>When the container has a shell.</blockquote>
+      <h3>12. Check RBAC</h3>
+      <pre>~$ kubectl auth can-i --list -n &lt;ns&gt;</pre>
+      <blockquote>Helps with permissions and role issues.</blockquote>
+
+      <h2>Quick decisions</h2>
+      <table>
+        <tr><th>When…</th><th>Do…</th></tr>
+        <tr><td>Pod won't start</td><td><code>describe + events</code></td></tr>
+        <tr><td>CrashLoopBackOff</td><td><code>logs --previous</code></td></tr>
+        <tr><td>Pending</td><td><code>describe node + top pods</code></td></tr>
+        <tr><td>No shell access</td><td><code>kubectl debug</code></td></tr>
+        <tr><td>Forbidden / RBAC</td><td><code>auth can-i</code></td></tr>
+      </table>
+    </div>
   </details>
   <footer>
     This is a static page, runs entirely in your browser — nothing is sent anywhere. <code>kubectl</code> stays in your terminal.
