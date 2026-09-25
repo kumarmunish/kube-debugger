@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kube Debugger — troubleshoot a broken Kubernetes deployment</title>
+<meta name="description" content="Interactive troubleshooting flowchart for Kubernetes Deployments, Services and Ingresses. Answer a few questions, get the fix.">
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2b333d;
+    --ink:#e6edf3; --dim:#9aa7b4; --accent:#5aa9e6; --accent-ink:#06263d;
+    --yellow:#f6e3a1; --yellow-ink:#3b2f00;
+    --green:#a6e3b8; --green-ink:#08331a;
+    --grey:#d7dce3; --grey-ink:#242a31;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:820px;margin:0 auto;padding:28px 18px 80px}
+  h1{font-size:clamp(24px,5vw,34px);margin:0 0 6px;letter-spacing:-.02em}
+  h1 span{color:var(--accent)}
+  .sub{color:var(--dim);margin:0 0 26px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin:0 0 14px}
+  .step{font:600 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-bottom:10px}
+  .q{font-size:17px;font-weight:600;margin:0 0 14px}
+  pre{background:#0a0d12;border:1px solid var(--line);border-left:3px solid var(--accent);
+      border-radius:8px;padding:11px 13px;margin:0 0 14px;overflow-x:auto;
+      font:13px/1.5 var(--mono);color:#cfe3f5}
+  pre b{color:#7ee0a2;font-weight:400}
+  .opts{display:grid;gap:8px}
+  button{font:inherit;color:inherit;cursor:pointer}
+  .opt{text-align:left;background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+       padding:11px 13px;transition:.12s}
+  .opt:hover{border-color:var(--accent);background:#20303d}
+  .opt kbd{display:inline-block;min-width:18px;margin-right:9px;color:var(--dim);
+           font:600 12px var(--mono)}
+  .trail{border-left:2px solid var(--line);margin:0 0 14px;padding:2px 0 2px 16px}
+  .trail .t{padding:7px 0;color:var(--dim);font-size:14px}
+  .trail .t b{color:var(--ink);font-weight:600}
+  .trail .t i{color:var(--accent);font-style:normal}
+  .out{border-radius:12px;padding:18px;margin:0 0 14px;color:var(--grey-ink)}
+  .out h2{margin:0 0 8px;font-size:20px}
+  .out p{margin:0 0 12px}
+  .out.fix{background:var(--yellow);color:var(--yellow-ink)}
+  .out.pass,.out.end{background:var(--green);color:var(--green-ink)}
+  .out.unknown{background:var(--grey)}
+  .out pre{background:rgba(0,0,0,.82);border-color:rgba(0,0,0,.4);color:#d8e6f2;margin-bottom:0}
+  .out .tag{font:600 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;opacity:.65;display:block;margin-bottom:8px}
+  .row{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+  .btn{background:var(--accent);color:var(--accent-ink);border:0;border-radius:9px;
+       padding:11px 18px;font-weight:600}
+  .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+  label.chk{display:flex;gap:11px;align-items:flex-start;background:var(--panel2);
+        border:1px solid var(--line);border-radius:9px;padding:12px 13px;cursor:pointer}
+  label.chk:has(:checked){border-color:var(--accent);background:#20303d}
+  label.chk input{margin:3px 0 0;accent-color:var(--accent);width:16px;height:16px}
+  label.chk small{display:block;color:var(--dim)}
+  details{margin-top:26px;color:var(--dim)}
+  summary{cursor:pointer}
+  details img{width:100%;margin-top:12px;border-radius:8px;background:#fff}
+  footer{margin-top:34px;color:var(--dim);font-size:13px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Kube <span>Debugger</span></h1>
+  <p class="sub">Pick what you want to debug, answer the questions, land on the fix.
+    Based on the learnk8s troubleshooting flowchart — debug bottom-up: Deployment → Pods → Service → Ingress.</p>
+  <div id="board"></div>
+  <details>
+    <summary>Show the full flowchart</summary>
+    <img src="kube-debugger.png" alt="Kubernetes troubleshooting flowchart" loading="lazy">
+  </details>
+  <footer>
+    This is a static page, runs entirely in your browser — nothing is sent anywhere. <code>kubectl</code> stays in your terminal.
+  </footer>
+</div>
+
+<script>
+// ─── the flowchart, as data ────────────────────────────────────────────────
+// question node: {cmd?, q, opts:[[label, nextId], ...]}
+// leaf node:     {done:1, kind:'fix'|'pass'|'unknown'|'end', t:title, d:detail, cmd?}
+const N = {
+// ── 1. Pods ───────────────────────────────────────────────────────────────
+p_pending:{cmd:'kubectl get pods',q:'Is there any Pod stuck in <b>Pending</b>?',opts:[
+  ['Yes — at least one Pod is Pending','p_pending_why'],
+  ['No — nothing is Pending','p_running']]},
+p_pending_why:{cmd:'kubectl describe pod &lt;pod-name&gt;\n<b># and, for quota errors:</b>\nkubectl get events --sort-by=.metadata.creationTimestamp',
+  q:'Read the <b>Events</b> section. What is holding the Pod back?',opts:[
+  ['The cluster is full — insufficient cpu/memory','c_bigger_cluster'],
+  ['A ResourceQuota on the Namespace blocks it','c_quota'],
+  ['It is bound to a Pending PersistentVolumeClaim','c_pvc'],
+  ['Events say none of those','p_node_assigned']]},
+p_node_assigned:{cmd:'kubectl get pods -o wide',q:'Is the Pod assigned to a Node?',opts:[
+  ['Yes — the NODE column names a node','c_kubelet_pending'],
+  ['No — the NODE column is empty','c_scheduler']]},
+
+p_running:{cmd:'kubectl get pods',q:'Are the Pods <b>Running</b>?',opts:[
+  ['Yes','p_ready'],['No','p_logs']]},
+p_logs:{cmd:'kubectl logs &lt;pod-name&gt;',q:'Can you see the logs for the app?',opts:[
+  ['Yes — the app logged an error','c_fix_app'],
+  ['No — no logs at all','p_died_fast']]},
+p_died_fast:{q:'Did the container die too quickly to log anything?',opts:[
+  ['Yes','p_logs_previous'],['No','p_status']]},
+p_logs_previous:{cmd:'kubectl logs &lt;pod-name&gt; --previous',
+  q:'The <b>previous</b> container’s logs — do they show the error?',opts:[
+  ['Yes','c_fix_app'],['No — still empty','p_status']]},
+p_status:{cmd:'kubectl describe pod &lt;pod-name&gt;',q:'What status does the container report?',opts:[
+  ['ImagePullBackOff / ErrImagePull','p_img_name'],
+  ['CrashLoopBackOff','p_crash_logs'],
+  ['RunContainerError','c_volumes'],
+  ['Something else','p_any_running']]},
+p_img_name:{q:'Is the image name correct — does that image exist?',opts:[
+  ['No','c_img_name'],['Yes','p_img_tag']]},
+p_img_tag:{q:'Is the tag valid — does that tag exist in the registry?',opts:[
+  ['No','c_img_tag'],['Yes','p_private_reg']]},
+p_private_reg:{q:'Are you pulling from a private registry?',opts:[
+  ['Yes','c_private_reg'],['No','c_cri']]},
+p_crash_logs:{cmd:'kubectl logs &lt;pod-name&gt; --previous',
+  q:'Did you inspect the logs and fix the crashing app?',opts:[
+  ['Not yet','c_fix_crash'],['Yes — app looks fine','p_cmd']]},
+p_cmd:{q:'Did you forget the <code>CMD</code> instruction in the Dockerfile?',opts:[
+  ['Yes','c_dockerfile'],['No','p_restarts']]},
+p_restarts:{cmd:'kubectl get pods --watch',
+  q:'Is the Pod cycling between Running and CrashLoopBackOff — restarting frequently?',opts:[
+  ['Yes','c_liveness'],['No','c_unknown']]},
+p_any_running:{cmd:'kubectl get pods -o wide',q:'Is there any container Running in that Pod?',opts:[
+  ['Yes','c_node_lifecycle'],['No','c_stackoverflow']]},
+
+p_ready:{cmd:'kubectl get pods',q:'Are the Pods <b>Ready</b> — does READY show 1/1?',opts:[
+  ['Yes','p_access'],['No','p_readiness']]},
+p_readiness:{cmd:'kubectl describe pod &lt;pod-name&gt;',q:'Is the Readiness probe failing?',opts:[
+  ['Yes','c_readiness'],['No','c_unknown']]},
+p_access:{cmd:'kubectl port-forward &lt;pod-name&gt; 3000:&lt;container-port&gt;',
+  q:'Open <code>http://localhost:3000</code> — can you reach the app?',opts:[
+  ['Yes','c_pods_ok'],['No','p_listen']]},
+p_listen:{q:'Is <code>containerPort</code> right, and is the app listening on <code>0.0.0.0</code> (not 127.0.0.1)?',opts:[
+  ['No','c_listen'],['Yes','c_unknown']]},
+
+// ── 2. Service ────────────────────────────────────────────────────────────
+s_endpoints:{cmd:'kubectl describe service &lt;service-name&gt;',
+  q:'Does the Service list any <b>Endpoints</b>?',opts:[
+  ['Yes — at least one ip:port','s_access'],
+  ['No — Endpoints is empty','s_selector']]},
+s_selector:{cmd:'kubectl get pods --show-labels\nkubectl get pods --selector &lt;key&gt;=&lt;value&gt;',
+  q:'Does the Service <code>selector</code> match the Pod labels — and are you in the right namespace?',opts:[
+  ['No / typo in the selector','c_selector'],['Yes, it matches','s_pod_ip']]},
+s_pod_ip:{cmd:'kubectl get pods -o wide',q:'Does the Pod have an IP address assigned?',opts:[
+  ['Yes','c_controller_manager'],['No','c_kubelet_ip']]},
+s_access:{cmd:'kubectl port-forward service/&lt;service-name&gt; 3000:&lt;service-port&gt;',
+  q:'Open <code>http://localhost:3000</code> — can you reach the app through the Service?',opts:[
+  ['Yes','c_svc_ok'],['No','s_targetport']]},
+s_targetport:{q:'Does the Service <code>targetPort</code> match the container’s <code>containerPort</code>?',opts:[
+  ['No','c_targetport'],['Yes','c_kubeproxy']]},
+
+// ── 3. Ingress ────────────────────────────────────────────────────────────
+i_backends:{cmd:'kubectl describe ingress &lt;ingress-name&gt;',
+  q:'Does the Ingress list any <b>Backends</b>?',opts:[
+  ['Yes','i_visit'],
+  ['No — empty, or "endpoints not found"','i_names']]},
+i_names:{q:'Do <code>service.name</code> and <code>service.port.number</code> in the Ingress match the Service?',opts:[
+  ['No','c_ing_names'],['Yes, they match','c_ing_controller']]},
+i_visit:{cmd:'kubectl get pods --all-namespaces            <b># find the controller Pod</b>\nkubectl describe pod &lt;ingress-pod&gt; -n &lt;ns&gt; | grep Ports\nkubectl port-forward &lt;ingress-pod&gt; 3000:80 -n &lt;ns&gt;',
+  q:'Bypass the infrastructure and hit the controller directly. Can you reach the app?',opts:[
+  ['Yes','i_public'],['No','c_ing_controller']]},
+i_public:{q:'The app should be working now. Can you reach it from the public internet?',opts:[
+  ['Yes','c_all_ok'],['No','c_infra']]},
+
+// ── conclusions ───────────────────────────────────────────────────────────
+c_bigger_cluster:{done:1,kind:'fix',t:'Provision a bigger cluster',
+  d:'The scheduler can’t find a node with enough CPU/memory. Add nodes, or lower the Pod’s resource requests.'},
+c_quota:{done:1,kind:'fix',t:'Relax the ResourceQuota limits',
+  d:'Creating this Pod would exceed the Namespace quota. Raise the quota, or shrink the requests.',
+  cmd:'kubectl describe quota --namespace &lt;ns&gt;'},
+c_pvc:{done:1,kind:'fix',t:'Fix the PersistentVolumeClaim',
+  d:'The Pod waits for a PVC that never binds — usually no matching PV, or a StorageClass that can’t provision.',
+  cmd:'kubectl get pvc\nkubectl describe pvc &lt;name&gt;'},
+c_kubelet_pending:{done:1,kind:'fix',t:'There is an issue with the Kubelet',
+  d:'The Pod is scheduled but the Kubelet on that node never started it. Check the node and the kubelet logs.',
+  cmd:'kubectl describe node &lt;node&gt;\n<b># on the node:</b>\njournalctl -u kubelet -n 200'},
+c_scheduler:{done:1,kind:'fix',t:'There is an issue with the Scheduler',
+  d:'Nothing assigned the Pod to a node. Check that kube-scheduler is running, and look for taints/affinity that exclude every node.',
+  cmd:'kubectl get pods -n kube-system | grep scheduler'},
+c_fix_app:{done:1,kind:'fix',t:'Fix the issue in the application',
+  d:'The container starts and the app itself fails — the logs name the reason. Missing env var, bad config, unreachable dependency.'},
+c_img_name:{done:1,kind:'fix',t:'Fix the image name',
+  d:'Kubernetes can’t find that image. Check the spelling and the registry host in <code>spec.containers[].image</code>.'},
+c_img_tag:{done:1,kind:'fix',t:'Fix the tag',
+  d:'The image exists but that tag doesn’t. Point at a tag that was actually pushed.'},
+c_private_reg:{done:1,kind:'fix',t:'Configure pulling from the private registry',
+  d:'Store the credentials in a Secret and reference it with <code>imagePullSecrets</code> in the Pod spec.',
+  cmd:'kubectl create secret docker-registry regcred \\\n  --docker-server=&lt;host&gt; --docker-username=&lt;user&gt; \\\n  --docker-password=&lt;pass&gt;'},
+c_cri:{done:1,kind:'unknown',t:'The issue could be with the CRI or the Kubelet',
+  d:'The image reference looks right and the registry is public, so the pull is failing below Kubernetes — container runtime or node networking/DNS.'},
+c_fix_crash:{done:1,kind:'fix',t:'Fix the crashing app',
+  d:'The container starts and exits. Read the previous container’s logs — that output is the reason.',
+  cmd:'kubectl logs &lt;pod-name&gt; --previous'},
+c_dockerfile:{done:1,kind:'fix',t:'Fix the Dockerfile',
+  d:'With no CMD (and no <code>command</code> in the Pod spec) the container has nothing to run, so it exits immediately.'},
+c_liveness:{done:1,kind:'fix',t:'Fix the liveness probe',
+  d:'The probe fails and Kubernetes keeps killing a healthy container. Raise <code>initialDelaySeconds</code>/<code>failureThreshold</code>, or point the probe at an endpoint that actually answers.'},
+c_volumes:{done:1,kind:'fix',t:'The issue is likely with mounting volumes',
+  d:'RunContainerError is misconfiguration before the app starts: a ConfigMap/Secret that doesn’t exist, or a read-only volume mounted read-write.',
+  cmd:'kubectl describe pod &lt;pod-name&gt;'},
+c_node_lifecycle:{done:1,kind:'unknown',t:'The issue is with the node-lifecycle controller',
+  d:'Containers are running but the Pod isn’t reported as it should be. Check node conditions and whether the node is being drained or marked NotReady.',
+  cmd:'kubectl get nodes\nkubectl describe node &lt;node&gt;'},
+c_stackoverflow:{done:1,kind:'unknown',t:'Off the map — consult StackOverflow',
+  d:'No container is running and the status matches none of the common errors. Post the full <code>kubectl describe pod</code> output.'},
+c_readiness:{done:1,kind:'fix',t:'Fix the Readiness probe',
+  d:'While Readiness fails the Pod is detached from the Service and gets no traffic. The failure is app-specific — the <b>Events</b> section names it.',
+  cmd:'kubectl describe pod &lt;pod-name&gt;'},
+c_listen:{done:1,kind:'fix',t:'Fix the app: listen on 0.0.0.0, and check containerPort',
+  d:'An app bound to 127.0.0.1 is unreachable from outside the container. Bind to 0.0.0.0 and make <code>containerPort</code> match the port it listens on.'},
+c_unknown:{done:1,kind:'unknown',t:'Unknown state',
+  d:'You’re outside the flowchart. Collect the evidence and ask with it: <code>kubectl describe pod</code>, <code>kubectl logs --previous</code>, and <code>kubectl get events --sort-by=.metadata.creationTimestamp</code>.'},
+c_pods_ok:{done:1,kind:'pass',t:'Pods are running correctly',
+  d:'Running, Ready, and reachable on their own port. If the app still isn’t answering, the problem is higher up — the Service, then the Ingress.'},
+
+c_selector:{done:1,kind:'fix',t:'Fix the Service selector',
+  d:'The Service <code>selector</code> must match the Pod <b>labels</b> — not the Deployment’s labels, and not its <code>matchLabels</code>. Same namespace, too.'},
+c_controller_manager:{done:1,kind:'unknown',t:'There is an issue with the Controller manager',
+  d:'The Pod has an IP and the labels match, yet no Endpoints object was populated. Check kube-controller-manager.',
+  cmd:'kubectl get pods -n kube-system | grep controller-manager'},
+c_kubelet_ip:{done:1,kind:'fix',t:'There is an issue with the Kubelet',
+  d:'A Pod with no IP was never wired to the network. Check the kubelet and the CNI plugin on that node.',
+  cmd:'kubectl get pods -n kube-system\n<b># on the node:</b>\njournalctl -u kubelet -n 200'},
+c_targetport:{done:1,kind:'fix',t:'Fix the Service targetPort',
+  d:'<code>targetPort</code> must equal the container’s <code>containerPort</code>. <code>port</code> can be any number — Services get their own IPs, so reusing 80 is fine.'},
+c_kubeproxy:{done:1,kind:'unknown',t:'The issue could be with kube-proxy',
+  d:'Endpoints are there and the ports line up, so the routing layer is the suspect. Check kube-proxy on the nodes.',
+  cmd:'kubectl get pods -n kube-system | grep kube-proxy'},
+c_svc_ok:{done:1,kind:'pass',t:'The Service is running correctly',
+  d:'It targets the Pods and serves traffic. If the app still isn’t reachable from outside, move on to the Ingress.'},
+
+c_ing_names:{done:1,kind:'fix',t:'Fix the Ingress backend reference',
+  d:'<code>backend.service.name</code> must be the Service’s name and <code>backend.service.port.number</code> the Service’s <code>port</code> — not the containerPort.'},
+c_ing_controller:{done:1,kind:'fix',t:'The issue is in the Ingress controller',
+  d:'The Ingress object is fine, so debug the controller with its own tooling. For ingress-nginx: <code>lint</code> checks nginx.conf, <code>backend</code> shows what it resolved, <code>logs</code> shows requests.',
+  cmd:'kubectl ingress-nginx lint --namespace &lt;ns&gt;\nkubectl ingress-nginx backend --namespace &lt;ns&gt;\nkubectl ingress-nginx logs --namespace &lt;ns&gt;'},
+c_infra:{done:1,kind:'fix',t:'The issue is in the infrastructure',
+  d:'It works inside the cluster but not from outside — so it’s how the cluster is exposed: the controller’s LoadBalancer/NodePort, cloud firewall or security groups, and DNS.',
+  cmd:'kubectl get service -n &lt;ingress-ns&gt;'},
+c_all_ok:{done:1,kind:'end',t:'Everything works',
+  d:'Pods Running and Ready, Service routing, Ingress reachable from the internet. Nothing left to debug.'},
+
+// ── 4. Deployment ─────────────────────────────────────────────────────────
+d_ready:{cmd:'kubectl get deployment &lt;name&gt;',
+  q:'Look at the <b>READY</b>, <b>UP-TO-DATE</b>, and <b>AVAILABLE</b> columns. What do you see?',opts:[
+  ['READY is 0/N — no Pods are running at all','d_no_pods'],
+  ['READY is partial, e.g. 1/3 — some Pods running','d_partial'],
+  ['UP-TO-DATE &lt; DESIRED — rollout is not progressing','d_rollout_stuck'],
+  ['All columns match DESIRED — looks correct','c_d_ok']]},
+d_no_pods:{cmd:'kubectl describe deployment &lt;name&gt;',
+  q:'Check the <b>Events</b> section of the Deployment. What does it say?',opts:[
+  ['Selector does not match Pod template labels','c_d_selector_mismatch'],
+  ['Quota or insufficient resources on the cluster','c_bigger_cluster'],
+  ['No events — Pods exist but are failing','c_d_pods_issue'],
+  ['No events — zero Pods were ever created','d_replica_count']]},
+d_replica_count:{cmd:"kubectl get deployment &lt;name&gt; -o jsonpath='{.spec.replicas}'",
+  q:'Is <code>spec.replicas</code> set to <b>0</b>?',opts:[
+  ['Yes','c_d_zero_replicas'],
+  ['No — it is a positive number','c_d_unknown_deploy']]},
+d_partial:{cmd:'kubectl get pods -l &lt;key&gt;=&lt;value&gt;',
+  q:'Are some Pods in a bad state — <b>CrashLoopBackOff</b>, <b>Error</b>, or <b>Pending</b>?',opts:[
+  ['Yes — some Pods are failing','c_d_pods_issue'],
+  ['No — all Pods look Running and Ready','d_rollout_stuck']]},
+d_rollout_stuck:{
+  cmd:"kubectl rollout status deployment/&lt;name&gt;\nkubectl get deployment &lt;name&gt; -o jsonpath='{.spec.paused}'",
+  q:'Is the Deployment <b>paused</b>? (<code>spec.paused: true</code>)',opts:[
+  ['Yes','c_d_resume'],
+  ['No','d_strategy']]},
+d_strategy:{
+  cmd:"kubectl get deployment &lt;name&gt; -o jsonpath='{.spec.strategy}'",
+  q:'Is <code>maxUnavailable</code> set to <b>0</b> while all existing Pods are currently unavailable — a deadlock where nothing can be removed to make room for the new Pod?',opts:[
+  ['Yes — looks like a deadlock','c_d_strategy'],
+  ['No','d_history']]},
+d_history:{
+  cmd:'kubectl rollout history deployment/&lt;name&gt;\nkubectl rollout history deployment/&lt;name&gt; --revision=&lt;N&gt;',
+  q:'Did the most recent rollout introduce the issue — a broken image, bad env var, or wrong config?',opts:[
+  ['Yes','c_d_rollback'],
+  ['No — history looks fine','c_d_pods_issue']]},
+
+c_d_ok:{done:1,kind:'pass',t:'Deployment looks healthy',
+  d:'READY, UP-TO-DATE, and AVAILABLE all match DESIRED. If the app still misbehaves, the issue is in the Pods.'},
+c_d_selector_mismatch:{done:1,kind:'fix',t:'Fix spec.selector.matchLabels',
+  d:'The Deployment\'s <code>spec.selector.matchLabels</code> must exactly match <code>spec.template.metadata.labels</code>. The selector is immutable after creation — you may need to delete and recreate the Deployment.',
+  cmd:'kubectl get deployment &lt;name&gt; -o yaml | grep -A5 selector\nkubectl get deployment &lt;name&gt; -o yaml | grep -A5 "template:"'},
+c_d_zero_replicas:{done:1,kind:'fix',t:'Set spec.replicas to a positive number',
+  d:'Someone scaled the Deployment to 0. Scale it back up.',
+  cmd:'kubectl scale deployment &lt;name&gt; --replicas=&lt;N&gt;'},
+c_d_resume:{done:1,kind:'fix',t:'Resume the paused Deployment',
+  d:'The Deployment was paused — either deliberately (a staged rollout) or accidentally. Resume it to let the rollout proceed.',
+  cmd:'kubectl rollout resume deployment/&lt;name&gt;'},
+c_d_strategy:{done:1,kind:'fix',t:'Fix the RollingUpdate strategy',
+  d:'With <code>maxUnavailable: 0</code> and <code>maxSurge: 0</code>, or when the cluster is full, the rollout stalls: it can\'t remove an old Pod (unavailability budget) and can\'t add a new one (no room). Set <code>maxUnavailable: 1</code> or switch the strategy to <code>Recreate</code>.',
+  cmd:'kubectl patch deployment &lt;name&gt; -p \'{"spec":{"strategy":{"rollingUpdate":{"maxUnavailable":1}}}}\''},
+c_d_rollback:{done:1,kind:'fix',t:'Roll back to the previous revision',
+  d:'Undo the last rollout to restore the known-good version, then fix the broken revision separately.',
+  cmd:'kubectl rollout undo deployment/&lt;name&gt;\n<b># or roll back to a specific revision:</b>\nkubectl rollout undo deployment/&lt;name&gt; --to-revision=&lt;N&gt;'},
+c_d_pods_issue:{done:1,kind:'pass',t:'Deployment config looks fine — the issue is in the Pods',
+  d:'The Deployment spec is correct but Pods are not healthy. Continue to Pod debugging — check status, logs, and events on the individual Pods.'},
+c_d_unknown_deploy:{done:1,kind:'unknown',t:'Unknown Deployment state',
+  d:'Replicas > 0 but no Pods were ever created, and no Events explain why. Collect the full Deployment description and the cluster events.',
+  cmd:'kubectl describe deployment &lt;name&gt;\nkubectl get events --sort-by=.metadata.creationTimestamp'}
+};
+
+const TRACKS=[
+  ['deployment','Deployment','d_ready','Stuck rollout, zero replicas, bad image, rollback needed…'],
+  ['pods','Pods','p_pending','Pending, CrashLoopBackOff, ImagePullBackOff, not Ready…'],
+  ['service','Service','s_endpoints','Empty Endpoints, wrong selector, port mismatch…'],
+  ['ingress','Ingress','i_backends','No Backends, controller issues, not reachable publicly…']
+];
+
+// ─── state ────────────────────────────────────────────────────────────────
+const board=document.getElementById('board');
+let queue=[], cur=null, trail=[], finished=null;
+
+// commands are trusted literals above (already entity-escaped, <b> allowed for comments)
+const cmdBlock=c=>c?`<pre>${c.split('\n')
+  .map(l=>l.startsWith('<b>#')?l:'~$ '+l).join('\n')}</pre>`:'';
+
+function picker(){
+  board.innerHTML=`<div class="card">
+    <div class="step">Step 1 — what do you want to debug?</div>
+    <div class="opts">${TRACKS.map(([id,name,,hint])=>`
+      <label class="chk"><input type="checkbox" value="${id}" checked>
+        <span><b>${name}</b><small>${hint}</small></span></label>`).join('')}
+    </div>
+    <div class="row"><button class="btn" id="go">Start debugging →</button></div>
+    <p style="color:var(--dim);margin:12px 0 0;font-size:13px">
+      Debug bottom-up: a Service can only be wrong once the Pods are fine. Leave all four ticked
+      if you just know "the app isn't responding".</p>
+  </div>`;
+  document.getElementById('go').onclick=()=>{
+    const sel=[...board.querySelectorAll('input:checked')].map(i=>i.value);
+    if(!sel.length)return;
+    queue=TRACKS.filter(t=>sel.includes(t[0]));
+    trail=[];finished=null;nextTrack();
+  };
+}
+
+function nextTrack(){
+  const t=queue.shift();
+  if(!t){finished={kind:'end',t:'All selected checks passed',d:'Nothing left in the list you picked.'};return render();}
+  trail.push({track:t[1]});
+  cur=t[2];render();
+}
+
+function answer(i){
+  const n=N[cur], [label,next]=n.opts[i];
+  trail.push({q:n.q,a:label,cmd:n.cmd});
+  const nn=N[next];
+  if(!nn.done){cur=next;return render();}
+  cur=null;
+  if(nn.kind==='pass'&&queue.length){trail.push({pass:nn});return nextTrack();}
+  finished=nn;render();
+}
+
+function render(){
+  let h='';
+  if(trail.length) h+='<div class="trail">'+trail.map(t=>
+    t.track?`<div class="t"><i>▸ ${t.track}</i></div>`
+    :t.pass?`<div class="t">✓ <b>${t.pass.t}</b></div>`
+    :`<div class="t">${t.q} → <b>${t.a}</b></div>`).join('')+'</div>';
+
+  if(cur){
+    const n=N[cur];
+    h+=`<div class="card"><div class="step">Question ${trail.filter(t=>t.q).length+1}</div>
+      ${cmdBlock(n.cmd)}<p class="q">${n.q}</p>
+      <div class="opts">${n.opts.map(([l],i)=>
+        `<button class="opt" data-i="${i}"><kbd>${i+1}</kbd>${l}</button>`).join('')}</div></div>`;
+  }
+  if(finished){
+    h+=`<div class="out ${finished.kind}">
+      <span class="tag">${{fix:'Fix this',pass:'Looks healthy',unknown:'Inconclusive',end:'Done'}[finished.kind]}</span>
+      <h2>${finished.t}</h2><p>${finished.d}</p>${cmdBlock(finished.cmd)}</div>`;
+  }
+  h+=`<div class="row">${trail.some(t=>t.q)?'<button class="btn ghost" id="back">← Undo</button>':''}
+      <button class="btn ${finished?'':'ghost'}" id="restart">Start over</button></div>`;
+  board.innerHTML=h;
+  board.querySelectorAll('.opt').forEach(b=>b.onclick=()=>answer(+b.dataset.i));
+  const back=document.getElementById('back'); if(back) back.onclick=undo;
+  document.getElementById('restart').onclick=picker;
+}
+
+function undo(){
+  finished=null;
+  while(trail.length){
+    const last=trail.pop();
+    if(last.q){cur=findNode(last.q);return render();}
+    if(last.track){queue.unshift(TRACKS.find(t=>t[1]===last.track));}
+  }
+  picker();
+}
+const findNode=q=>Object.keys(N).find(k=>N[k].q===q);
+
+// number keys pick an answer
+addEventListener('keydown',e=>{
+  const b=board.querySelector(`.opt[data-i="${+e.key-1}"]`);
+  if(b&&+e.key>0)b.click();
+});
+
+picker();
+</script>
+</body>
+</html>
